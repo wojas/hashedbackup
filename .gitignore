@@ -1,0 +1,11 @@
+*.swp
+*.pyc
+*.pyo
+*~
+__pycache__
+venv
+tmp
+*.deb
+test.json*
+*.egg-info
+.idea
