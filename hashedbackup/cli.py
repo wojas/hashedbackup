@@ -27,6 +27,18 @@ p.add_argument('dst', type=str, help='backup destination')
 p.add_argument('-n', '--namespace', type=str, required=True,
     help='backup namespace (allows backups of different folders '
          'to share the same hash database)')
+p.add_argument('--symlink', action='store_true',
+    help='Add symbolic links into the repository instead of copying data. '
+         'WARNING: This is useless as a backup. Only useful for testing or '
+         'when using another tool that follows symlinks for tha actual backup.')
+p.add_argument('--hardlink', action='store_true',
+    help='Add hard links into the repository instead of copying data. '
+         'This only works on the same filesystem, which makes it not very '
+         'useful as a backup. Application can also modify the data through the '
+         'other link, corrupting the repository. '
+         'WARNING: Hard links are unreliable on OS X. On 10.11 (El Capitan) '
+         'editing a file in Preview.app (and probably in other apps too) '
+         'will destroy the data for the other link!')
 
 
 def main():

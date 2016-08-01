@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import os
@@ -6,6 +7,7 @@ import grp
 import urllib.parse
 import uuid
 
+MB = 1024 * 1024
 
 def printerr(*args, **kwargs):
     kwargs['file'] = sys.stderr
@@ -24,6 +26,30 @@ def json_line(data):
 
 def temp_filename():
     return str(uuid.uuid1())
+
+def filehash(fpath, *, bufsize=1*MB):
+    h = hashlib.md5()
+    with open(fpath, 'rb') as f:
+        buf = f.read(bufsize)
+        while buf:
+            h.update(buf)
+            buf = f.read(bufsize)
+    return str(h.hexdigest())
+
+def copy_and_hash(src_path, dst_path, *, bufsize=1*MB, progress=None):
+    copied = 0
+    h = hashlib.md5()
+    with open(src_path, 'rb') as src:
+        with open(dst_path, 'wb') as dst:
+            buf = src.read(bufsize)
+            while buf:
+                h.update(buf)
+                dst.write(buf)
+                if progress:
+                    copied += len(buf)
+                    progress(copied)
+                buf = src.read(bufsize)
+    return str(h.hexdigest())
 
 class CachedUserLookup:
     def __init__(self, func):
