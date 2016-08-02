@@ -1,5 +1,6 @@
 import os
 
+from hashedbackup.backend import get_backend
 from hashedbackup.utils import printerr
 
 import logging
@@ -8,32 +9,38 @@ log = logging.getLogger(__name__)
 README = """This is a hashedbackup backup repository.
 """
 
-def init_repo(dst):
+def init_repo(backend):
+    """
+    :type backend: hashedbackup.backend.BackendBase
+    """
+    dst = backend.path
     log.info('Creating new repository in %s', dst)
-    if not os.path.exists(dst):
-        os.mkdir(dst)
+    if not backend.exists(dst):
+        if not backend.try_mkdir(dst):
+            raise OSError("Count not create {}".format(dst))
     for dirname in ('manifests', 'objects', 'tmp'):
-        os.mkdir(os.path.join(dst, dirname))
-    with open(os.path.join(dst, 'README.txt'), 'w') as f:
+        path = os.path.join(dst, dirname)
+        if not backend.try_mkdir(path):
+            raise OSError("Count not create {}".format(path))
+
+    with backend.open(os.path.join(dst, 'README.txt'), 'w') as f:
         f.write(README)
     log.info('Repository successfully created')
 
 
-def is_empty_dir(dst):
-    return not os.listdir(dst)
-
-
 def init(options):
-    dst = options.dst
-    if not os.path.exists(dst):
-        if not os.path.exists(os.path.dirname(dst)):
+    backend = get_backend(options.dst, options)
+    dst = backend.path
+
+    if not backend.exists(dst):
+        if not backend.exists(os.path.dirname(backend.path)):
             printerr("ERROR: Parent directory of {} does not exist".format(dst))
         else:
-            init_repo(dst)
+            init_repo(backend)
     else:
-        if not os.path.isdir(dst):
+        if not backend.isdir(dst):
             printerr("ERROR: {} is not a directory".format(dst))
-        elif not is_empty_dir(dst):
+        elif backend.listdir(dst):
             printerr("ERROR: {} is not empty".format(dst))
         else:
-            init_repo(dst)
+            init_repo(backend)

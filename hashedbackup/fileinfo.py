@@ -2,14 +2,17 @@ import os
 import hashlib
 import stat
 import json
+import logging
 
 from xattr import xattr
 
 from hashedbackup.utils import lookup_user, lookup_group
 
+log = logging.getLogger(__name__)
+
 MB = 1024 * 1024
 TO_NANO = 1000000000
-ATTR = 'nl.wojas.mediabackup.stat'
+ATTR = 'nl.wojas.hashedbackup'
 
 
 class FileInfo:
@@ -32,7 +35,7 @@ class FileInfo:
 
     @property
     def mode(self):
-        return int(oct(stat.S_IMODE(self.st.st_mode)).lstrip('0o'))
+        return int(oct(stat.S_IMODE(self.st.st_mode))[2:]) # strip '0o'
 
     def _load_xattr(self):
         try:
@@ -53,7 +56,10 @@ class FileInfo:
             md5=fhash,
             size=self.size
         )
-        self.xattr.set(ATTR, json.dumps(new_cached).encode('ascii'))
+        try:
+            self.xattr.set(ATTR, json.dumps(new_cached).encode('ascii'))
+        except IOError:
+            log.warn('Could not write xattr to %s', self.fpath)
 
     def _calc_filehash(self, bufsize=1*MB):
         h = hashlib.md5()
@@ -88,9 +94,8 @@ class FileInfo:
             gid=st.st_gid,
             user=lookup_user.get(st.st_uid),
             group=lookup_group.get(st.st_gid),
+            # atime and ctime are not very useful
             mtime=st.st_mtime_ns // TO_NANO,
             mtime_ns=st.st_mtime_ns % TO_NANO,
-            ctime=st.st_ctime_ns // TO_NANO,
-            ctime_ns=st.st_ctime_ns % TO_NANO,
         )
 

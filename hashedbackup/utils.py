@@ -13,11 +13,6 @@ def printerr(*args, **kwargs):
     kwargs['file'] = sys.stderr
     print(*args, **kwargs)
 
-def check_destination_valid(dst):
-    if not os.path.exists(os.path.join(dst, 'manifests')):
-        raise FileNotFoundError(
-            "Invalid backup destination (did you run `hashedbackup init`?)")
-
 def encode_namespace(namespace):
     return urllib.parse.quote(namespace).replace('%', '=')
 
@@ -36,20 +31,24 @@ def filehash(fpath, *, bufsize=1*MB):
             buf = f.read(bufsize)
     return str(h.hexdigest())
 
-def copy_and_hash(src_path, dst_path, *, bufsize=1*MB, progress=None):
+def copy_and_hash_fo(src, dst, *, bufsize=1*MB, progress=None):
     copied = 0
     h = hashlib.md5()
+    buf = src.read(bufsize)
+    while buf:
+        h.update(buf)
+        dst.write(buf)
+        if progress:
+            copied += len(buf)
+            progress(copied)
+        buf = src.read(bufsize)
+    return str(h.hexdigest())
+
+def copy_and_hash(src_path, dst_path, *, bufsize=1*MB, progress=None):
     with open(src_path, 'rb') as src:
         with open(dst_path, 'wb') as dst:
-            buf = src.read(bufsize)
-            while buf:
-                h.update(buf)
-                dst.write(buf)
-                if progress:
-                    copied += len(buf)
-                    progress(copied)
-                buf = src.read(bufsize)
-    return str(h.hexdigest())
+            return copy_and_hash_fo(
+                src, dst, bufsize=bufsize, progress=progress)
 
 class CachedUserLookup:
     def __init__(self, func):

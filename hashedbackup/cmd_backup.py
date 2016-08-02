@@ -2,11 +2,11 @@ import datetime
 import os
 import socket
 import logging
-import bz2
+import time
 
 from hashedbackup.fileinfo import FileInfo
-from hashedbackup.utils import printerr, check_destination_valid, \
-    encode_namespace, json_line, temp_filename, copy_and_hash
+from hashedbackup.backend import ManifestWriter, get_backend
+from hashedbackup.utils import printerr
 
 MB = 1024 * 1024
 
@@ -18,12 +18,14 @@ class BackupCommand:
     options = None
     root = None
     dst = None
+    sftp = False
 
     totalsize = 0
     n_cached = 0
     n_updated = 0
     n_objects_added = 0
     n_objects_exist = 0
+    uploaded = 0
 
     manifest_path = None
     manifest_tmp = None
@@ -31,50 +33,37 @@ class BackupCommand:
 
     def __init__(self, options):
         self.options = options
+        self.start_time = time.time()
 
         if options.symlink and options.hardlink:
             raise ValueError('Cannot combine --symlink and --hardlink')
 
         self.root = os.path.abspath(options.src)
         self.dst = options.dst
+        self.hashes = set()
 
-    def temppath(self):
-        return os.path.join(self.dst, 'tmp', temp_filename())
+        self.backend = get_backend(self.dst, options)
+        log.debug('Storage backend is %s', self.backend.__class__.__name__)
 
     def open_manifest(self):
-        manifest_dir = os.path.join(
-            self.dst, 'manifests', encode_namespace(self.options.namespace))
-
-        if not os.path.exists(manifest_dir):
-            log.warn('Creating new manifest namespace: %s',
-                     self.options.namespace)
-            os.mkdir(manifest_dir)
-
-        dt = datetime.datetime.utcnow()
-        self.manifest_path = os.path.join(
-            manifest_dir, '{:%Y%m%d-%H%M%S}.manifest.bz2'.format(dt))
-        self.manifest_tmp = self.temppath()
-        log.debug('Manifest temp file: %s', self.manifest_tmp)
-        self.manifest = bz2.open(self.manifest_tmp, 'wt', encoding='utf-8')
-
-        self.add_to_manifest(
+        self.manifest = ManifestWriter(self.backend, self.options.namespace)
+        # TODO: move to ManifestWriter?
+        self.manifest.add(
             version=0,
-            created=dt.replace(tzinfo=datetime.timezone.utc).timestamp(),
-            created_human=str(dt),
+            created=self.manifest.dt.replace(
+                tzinfo=datetime.timezone.utc).timestamp(),
+            created_human=str(self.manifest.dt),
             hostname=socket.gethostname(),
             root=self.root
         )
 
-    def add_to_manifest(self, **data):
-        self.manifest.write(json_line(data))
-
     def close_manifest(self):
-        self.add_to_manifest(
+        # TODO: move to ManifestWriter?
+        self.manifest.add(
             eof=True
         )
-        self.manifest.close()
-        os.rename(self.manifest_tmp, self.manifest_path)
-        log.info('Manifest saved to %s', self.manifest_path)
+        self.manifest.commit()
+        log.verbose('Manifest saved to %s', self.manifest.manifest_path)
 
     def process_dir(self, relpath):
         dpath = os.path.join(self.root, relpath)
@@ -82,40 +71,14 @@ class BackupCommand:
         try:
             info = FileInfo(dpath)
         except FileNotFoundError:
-            printerr('Skipping dir (cannot stat):', relpath)
+            log.warn('Skipping dir (cannot stat): %s', relpath)
             return
 
-        self.add_to_manifest(
+        self.manifest.add(
             path=relpath,
             type='d',
             stat=info.stat_dict()
         )
-
-    def object_path(self, fhash):
-        return os.path.join(self.dst, 'objects', fhash[0:2], fhash[2:4], fhash)
-
-    def add_object(self, fhash, fpath):
-        objpath = self.object_path(fhash)
-        if os.path.exists(objpath):
-            self.n_objects_exist += 1
-            return
-        os.makedirs(os.path.dirname(objpath), exist_ok=True)
-
-        if self.options.symlink:
-            os.symlink(fpath, objpath)
-        elif self.options.hardlink:
-            os.link(fpath, objpath)
-        else:
-            tmp = self.temppath()
-            tmphash = copy_and_hash(fpath, tmp)
-            if tmphash != fhash:
-                # TODO: can we recover by retrying process_file() ?
-                os.unlink(tmp)
-                raise ValueError(
-                    'File {} hash does not match after copy!'.format(fpath))
-            os.rename(tmp, objpath)
-
-        self.n_objects_added += 1
 
     def process_file(self, relpath):
         fpath = os.path.join(self.root, relpath)
@@ -123,11 +86,11 @@ class BackupCommand:
         try:
             info = FileInfo(fpath)
         except FileNotFoundError:
-            printerr('Skipping broken symlink:', relpath)
+            log.warn('Skipping broken symlink: %s', relpath)
             return
 
         if not info.is_regular:
-            printerr('Skipping non-regular file:', relpath)
+            log.warn('Skipping non-regular file: %s', relpath)
             return
 
         self.totalsize += info.size
@@ -143,16 +106,29 @@ class BackupCommand:
         else:
             self.n_updated += 1
 
-        printerr(
-            self.root, relpath,
+        log.verbose("%s %s %i %s %s %s",
+            relpath,
             info.mode,
             info.st.st_mtime,
-            info.size,
-            fhash, '*' if not info.hash_from_cache else '')
+            '{:,}'.format(info.size),
+            fhash,
+            '*' if not info.hash_from_cache else '')
 
-        self.add_object(fhash, fpath)
+        t0 = time.time()
+        if fhash in self.hashes:
+            added = False
+        else:
+            added = self.backend.add_object(fhash, fpath)
+        t1 = time.time()
+        if added:
+            speed = '{:,.1f} kB/s'.format(info.size / (t1 - t0) / 1024)
+            log.verbose('Upload speed: %s', speed)
+            self.n_objects_added += 1
+            self.uploaded += info.size
+        else:
+            self.n_objects_exist += 1
 
-        self.add_to_manifest(
+        self.manifest.add(
             path=relpath,
             type='f',
             size=info.size,
@@ -160,8 +136,13 @@ class BackupCommand:
             stat=info.stat_dict()
         )
 
+    def on_walk_error(self, exc):
+        assert isinstance(exc, OSError)
+        log.warn('Could not list directory, skipping: %s', exc.filename)
+
     def walk_root(self):
-        for dirname, dirs, files in os.walk(self.root):
+        for dirname, dirs, files in os.walk(
+                    self.root, onerror=self.on_walk_error, followlinks=True):
             assert isinstance(dirname, str)
             assert dirname.startswith(self.root)
             reldir = dirname[len(self.root):].lstrip('/')
@@ -175,7 +156,12 @@ class BackupCommand:
                 self.process_file(relpath)
 
     def run(self):
-        check_destination_valid(self.dst)
+        self.backend.check_destination_valid()
+        #t0 = time.time()
+        #self.hashes = self.backend.get_object_hashes()
+        #t1 = time.time()
+        #log.verbose('Fetching repository hashes took %.1fs for %i hashes',
+        #            t1 - t0, len(self.hashes))
 
         try:
             self.open_manifest()
@@ -184,10 +170,12 @@ class BackupCommand:
         except KeyboardInterrupt:
             printerr('INTERRUPTED')
 
-        printerr('Total size (MB):', self.totalsize / MB)
-        printerr(self.n_cached, 'cached,', self.n_updated, 'hashed')
-        printerr(self.n_objects_added, 'added,',
-                 self.n_objects_exist, 'already in repository')
+        log.info('Total size (MB): %.1f', self.totalsize / MB)
+        log.info('%i cached, %i hashed', self.n_cached, self.n_updated)
+        log.info('%i added, %i already in repository',
+                 self.n_objects_added, self.n_objects_exist)
+        log.info('%.1f MB uploaded', self.uploaded / MB)
+        log.info('Execution time: %.1fs', time.time() - self.start_time)
 
 
 def backup(options):

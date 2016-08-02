@@ -1,0 +1,4 @@
+colorlog==2.7.0
+#cryptography==1.4
+paramiko==2.0.2
+xattr==0.8.0
