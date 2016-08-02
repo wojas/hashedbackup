@@ -10,7 +10,7 @@ def verbose(self, message, *args, **kws):
         self._log(VERBOSE, message, args, **kws)
 logging.Logger.verbose = verbose
 
-from hashedbackup import cmd_init, cmd_backup
+from hashedbackup import cmd_init, cmd_backup, cmd_list_manifests
 
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,13 @@ p = subparsers.add_parser('init',
     help='Initialize a backup repository. This is used to initialize the '
          'backup destination.')
 p.add_argument('dst', type=str, help='backup destination')
+
+p = subparsers.add_parser('list-manifests',
+    help='List manifests in backup repository')
+p.add_argument('dst', type=str, help='backup destination')
+p.add_argument('-n', '--namespace', type=str, required=True,
+    help='backup namespace (allows backups of different folders '
+         'to share the same hash database)')
 
 p = subparsers.add_parser('backup', help='backup a directory')
 p.add_argument('src', type=str, help='directory to backup')
@@ -100,6 +107,8 @@ def main():
         cmd_init.init(options)
     elif options.command == 'backup':
         cmd_backup.backup(options)
+    elif options.command == 'list-manifests':
+        cmd_list_manifests.list_manifests(options)
     else:
         raise NotImplementedError(options.command)
 

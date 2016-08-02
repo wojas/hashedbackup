@@ -15,6 +15,9 @@ def printerr(*args, **kwargs):
 def encode_namespace(namespace):
     return urllib.parse.quote(namespace).replace('%', '=')
 
+def decode_namespace(encoded_namespace):
+    return urllib.parse.unquote(encoded_namespace.replace('=', '%'))
+
 def json_line(data):
     return json.dumps(data, ensure_ascii=False) + '\n'
 
