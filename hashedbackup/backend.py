@@ -10,7 +10,7 @@ import paramiko
 from paramiko.config import SSH_PORT
 
 from hashedbackup.utils import copy_and_hash_fo, temp_filename, copy_and_hash, \
-    encode_namespace, json_line
+    encode_namespace, json_line, MB
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +157,11 @@ class LocalBackend(BackendBase):
     def isdir(self, path):
         return os.path.isdir(path)
 
+    def get_object_hashes(self):
+        # No need for this speedup for local filesystems. We will just check
+        # each object's existence.
+        return set()
+
 
 class SFTPBackend(BackendBase):
 
@@ -189,6 +194,9 @@ class SFTPBackend(BackendBase):
         self.client.load_system_host_keys()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+        # Will allow us to skip some remote mkdir calls
+        self._existing_object_dirs = set()
+
         self._connect()
 
     def _connect(self):
@@ -209,6 +217,12 @@ class SFTPBackend(BackendBase):
             password=self.password,
             port=self.config.get('port', SSH_PORT),
             sock=proxy)
+
+        transport = self.client.get_transport()
+        # https://github.com/paramiko/paramiko/issues/175
+        transport.window_size = 2147483647
+        # 512MB -> 4GB, this is a security degradation
+        transport.packetizer.REKEY_BYTES = pow(2, 32)
 
         self.sftp = self.client.open_sftp()
 
@@ -244,11 +258,13 @@ class SFTPBackend(BackendBase):
 
         size = os.path.getsize(fpath)
 
-        # Checking for existence just adds roundtrips
-        self.try_mkdir(
-            os.path.join(self.path, 'objects', fhash[0:2]))
-        self.try_mkdir(
-            os.path.join(self.path, 'objects', fhash[0:2], fhash[2:4]))
+        # Checking remotely for existence just adds roundtrips
+        if fhash[:2] not in self._existing_object_dirs:
+            self.try_mkdir(
+                os.path.join(self.path, 'objects', fhash[0:2]))
+        if fhash[:4] not in self._existing_object_dirs:
+            self.try_mkdir(
+                os.path.join(self.path, 'objects', fhash[0:2], fhash[2:4]))
 
         tmp = os.path.join(self.path, 'tmp', temp_filename())
 
@@ -281,22 +297,44 @@ class SFTPBackend(BackendBase):
         return stat.S_ISDIR(self.sftp.stat(path).st_mode)
 
     def get_object_hashes(self):
-        objects_root = os.path.join(self.path, 'objects')
+        """Get object hashes on server
+
+        This executes a remote shell command to get a list of hashes, since
+        recursively listing the contents of objects/ through SFTP would be
+        extremely slow, because it requires three remote sync calls for up to
+        ~65k directories.
+
+        If the server does not allow executing shell commands, this method
+        returns an empty set and each object will be checked using one remote
+        stat() call.
+
+        :return: set of hex hashes on server
+        :rtype: set[str]
+        """
         hashes = set()
+        cmd = """find '{}/objects' -type f | sed 's|.*/||'""".format(
+            self.path.replace("'", r"\'"))
+        log.verbose('Fetching remote file hashes using exec_comamnd: %s', cmd)
 
-        for dir1 in self.listdir(objects_root):
-            if dir1.startswith('.') or len(dir1) != 2:
-                continue
+        try:
+            stdin, stdout, stderr = self.client.exec_command(cmd, bufsize=1*MB)
+        except paramiko.SSHException as e:
+            log.warn('Executing remote command to fetch hashes failed, '
+                     'falling back to slow SFTP stat (%s)', e)
+            return set()
 
-            for dir2 in self.listdir(os.path.join(objects_root, dir1)):
-                if dir2.startswith('.') or len(dir2) != 2:
-                    continue
+        for line in stdout:
+            line = line.strip()
+            if len(line) == 32:
+                hashes.add(line)
+                self._existing_object_dirs.add(line[:2])
+                self._existing_object_dirs.add(line[:4])
+            else:
+                log.debug('Invalid hash in list, skipping: %s', line)
 
-                for h in self.listdir(os.path.join(objects_root, dir1, dir2)):
-                    if len(h) != 32:
-                        continue
-                    hashes.add(h)
-
+        stdin.close()
+        stdout.close()
+        stderr.close()
         return hashes
 
 

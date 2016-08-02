@@ -59,7 +59,7 @@ class FileInfo:
         try:
             self.xattr.set(ATTR, json.dumps(new_cached).encode('ascii'))
         except IOError:
-            log.warn('Could not write xattr to %s', self.fpath)
+            log.verbose('Could not write xattr to %s', self.fpath)
 
     def _calc_filehash(self, bufsize=1*MB):
         h = hashlib.md5()

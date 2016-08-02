@@ -1,7 +1,6 @@
 import hashlib
 import json
 import sys
-import os
 import pwd
 import grp
 import urllib.parse

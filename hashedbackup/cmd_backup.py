@@ -4,11 +4,20 @@ import socket
 import logging
 import time
 
+from xattr import xattr
+
 from hashedbackup.fileinfo import FileInfo
 from hashedbackup.backend import ManifestWriter, get_backend
 from hashedbackup.utils import printerr
 
 MB = 1024 * 1024
+
+# These are system files/dirs that are unsafe or useless to backup
+IGNORED_ENTRIES = {'.DS_Store', '.Trashes' '.fseventsd', '.Spotlight-V100'}
+EXCLUDE_XATTR = [
+    'com.apple.metadata:com_apple_backup_excludeItem',
+    'nl.wojas.hashedbackup.exclude',
+]
 
 log = logging.getLogger(__name__)
 
@@ -106,13 +115,12 @@ class BackupCommand:
         else:
             self.n_updated += 1
 
-        log.verbose("%s %s %i %s %s %s",
-            relpath,
-            info.mode,
-            info.st.st_mtime,
-            '{:,}'.format(info.size),
+        log.verbose("[%6i] %s %s %s %s",
+            self.n_objects_added + self.n_objects_exist + 1,
             fhash,
-            '*' if not info.hash_from_cache else '')
+            '*' if not info.hash_from_cache else ' ',
+            '{:11,}'.format(info.size),
+            relpath)
 
         t0 = time.time()
         if fhash in self.hashes:
@@ -121,7 +129,7 @@ class BackupCommand:
             added = self.backend.add_object(fhash, fpath)
         t1 = time.time()
         if added:
-            speed = '{:,.1f} kB/s'.format(info.size / (t1 - t0) / 1024)
+            speed = '{:10,.1f} kB/s'.format(info.size / (t1 - t0) / 1024)
             log.verbose('Upload speed: %s', speed)
             self.n_objects_added += 1
             self.uploaded += info.size
@@ -140,6 +148,30 @@ class BackupCommand:
         assert isinstance(exc, OSError)
         log.warn('Could not list directory, skipping: %s', exc.filename)
 
+    def exclude_file(self, reldir, name, *, xa=None):
+        """Check if a file or dir needs to be excluded"""
+        path = os.path.join(self.root, reldir, name)
+        if name in IGNORED_ENTRIES:
+            log.verbose('Skipped (in IGNORED_ENTRIES): %s', path)
+            return True
+
+        if name.startswith('._'):
+            log.verbose('Skipped (xattr storage): %s', path)
+            return True
+
+        if not xa:
+            xa = xattr(path)
+        for attr in EXCLUDE_XATTR:
+            try:
+                xa.get(attr)
+            except IOError:
+                pass
+            else:
+                log.verbose('Skipped (%s): %s', attr, path)
+                return True
+
+        return False
+
     def walk_root(self):
         for dirname, dirs, files in os.walk(
                     self.root, onerror=self.on_walk_error, followlinks=True):
@@ -147,21 +179,32 @@ class BackupCommand:
             assert dirname.startswith(self.root)
             reldir = dirname[len(self.root):].lstrip('/')
 
-            for dname in dirs:
+            for dname in dirs[:]:
+                if self.exclude_file(reldir, dname):
+                    # The dirs list is editable. Removing entries will prevent
+                    # recursing into them. This is officially supported by
+                    # os.walk().
+                    dirs.remove(dname)
+
                 relpath = os.path.join(reldir, dname)
                 self.process_dir(relpath)
 
             for fname in files:
+                if self.exclude_file(reldir, fname):
+                    continue
+
                 relpath = os.path.join(reldir, fname)
                 self.process_file(relpath)
 
     def run(self):
         self.backend.check_destination_valid()
-        #t0 = time.time()
-        #self.hashes = self.backend.get_object_hashes()
-        #t1 = time.time()
-        #log.verbose('Fetching repository hashes took %.1fs for %i hashes',
-        #            t1 - t0, len(self.hashes))
+
+        # To faster skip already uploaded objects, fetch hashes from server
+        t0 = time.time()
+        self.hashes = self.backend.get_object_hashes()
+        t1 = time.time()
+        log.verbose('Fetching repository hashes took %.1fs for %i hashes',
+                    t1 - t0, len(self.hashes))
 
         try:
             self.open_manifest()
