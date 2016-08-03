@@ -210,13 +210,17 @@ class SFTPBackend(BackendBase):
         else:
             proxy = None
 
+        # Connect to server
+        # Compression will not speedup picture transfers, but will help for
+        # the initial remote hash download and for files that are compressible.
         # noinspection PyTypeChecker
         self.client.connect(
             self.config.get('hostname', self.hostname),
             username=self.user or self.config.get('user', None),
             password=self.password,
             port=self.config.get('port', SSH_PORT),
-            sock=proxy)
+            sock=proxy,
+            compress=True)
 
         transport = self.client.get_transport()
         # https://github.com/paramiko/paramiko/issues/175
