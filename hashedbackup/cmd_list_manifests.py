@@ -11,13 +11,11 @@ from hashedbackup.utils import decode_namespace
 log = logging.getLogger(__name__)
 
 
-def list_manifests(options):
+def get_remote_manifests(options):
     backend = get_backend(options.dst, options)
     backend.check_destination_valid()
 
-    headers = ['Namespace', 'ID', 'Timestamp (UTC)', 'Timestamp (local)',
-               'Age']
-    rows = []
+    manifest_dict = {}
     manifests = os.path.join(backend.path, 'manifests')
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
@@ -31,6 +29,8 @@ def list_manifests(options):
         if options.namespace and name != options.namespace:
             continue
 
+        manifest_dict[name] = []
+
         for fname in sorted(backend.listdir(os.path.join(manifests, ns))):
             if not fname.endswith('.manifest.bz2'):
                 continue
@@ -42,17 +42,41 @@ def list_manifests(options):
                 log.warn('Cannot parse filename: %s', fname)
                 continue
             dt = dt.replace(tzinfo=datetime.timezone.utc)
+            dt_local = dt.astimezone(None)
 
             age = now - dt
             mm, ss = divmod(age.seconds, 60)
             hh, mm = divmod(mm, 60)
 
+            manifest_dict[name].append(dict(
+                filename=fname,
+                id=dt_str,
+                utc=dt,
+                utc_str=str(dt).split('+')[0],
+                local=dt_local,
+                local_str=str(dt_local).split('+')[0],
+                age=age,
+                age_str='{:3}d {:2}h {:2}m'.format(age.days, hh, mm)
+            ))
+
+    return manifest_dict
+
+
+def list_manifests(options):
+    manifests = get_remote_manifests(options)
+
+    headers = ['Namespace', 'ID', 'Timestamp (UTC)', 'Timestamp (local)',
+               'Age']
+    rows = []
+
+    for name, items in sorted(manifests.items()):
+        for manifest in items:
             rows.append([
                 name,
-                dt_str,
-                str(dt).split('+')[0],
-                str(dt.astimezone(None)).split('+')[0],
-                '{:3}d {:2}h {:2}m'.format(age.days, hh, mm)
+                manifest['id'],
+                manifest['utc_str'],
+                manifest['local_str'],
+                manifest['age_str'],
             ])
 
     if not rows:
