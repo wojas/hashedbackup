@@ -3,6 +3,7 @@ import sys
 import logging
 import colorlog
 
+# Add extra VERBOSE log level between DEBUG and INFO
 VERBOSE = 15
 logging.addLevelName(VERBOSE, "VERBOSE")
 def verbose(self, message, *args, **kws):
@@ -10,7 +11,8 @@ def verbose(self, message, *args, **kws):
         self._log(VERBOSE, message, args, **kws)
 logging.Logger.verbose = verbose
 
-from hashedbackup import cmd_init, cmd_backup, cmd_list_manifests
+from hashedbackup import cmd_init, cmd_backup, cmd_list_manifests, \
+    cmd_backup_profile
 
 
 log = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ p.add_argument('dst', type=str, help='backup destination')
 p = subparsers.add_parser('list-manifests',
     help='List manifests in backup repository')
 p.add_argument('dst', type=str, help='backup destination')
-p.add_argument('-n', '--namespace', type=str, required=True,
+p.add_argument('-n', '--namespace', type=str,
     help='backup namespace (allows backups of different folders '
          'to share the same hash database)')
 
@@ -58,13 +60,14 @@ p.add_argument('--hardlink', action='store_true',
          'editing a file in Preview.app (and probably in other apps too) '
          'will destroy the data for the other link!')
 
+p = subparsers.add_parser('backup-profile',
+    help='Run a backup profile defined in ~/.hashedbackup/profiles')
+p.add_argument('profile_name', nargs='?', type=str, help='profile to use')
+p.add_argument('--age', action='store_true',
+    help='Check age of last backup (requires connecting to repositories)')
 
-def main():
-    options = parser.parse_args()
-    if not options.command:
-        print(parser.format_help(), file=sys.stderr)
-        return
 
+def setup_logging(options):
     handler = colorlog.StreamHandler()
     if sys.stderr.isatty():
         formatter = colorlog.ColoredFormatter(
@@ -81,8 +84,8 @@ def main():
             secondary_log_colors={
                 'message': {
                     'DEBUG': 'bold_black',
-                    'ERROR': 'red',
-                    'CRITICAL':'red'
+                    'ERROR': 'bold_red',
+                    'CRITICAL':'bold_red'
                 }
             },
             style='%'
@@ -101,14 +104,23 @@ def main():
         level = logging.INFO
     logging.basicConfig(level=level, handlers=[handler])
 
+
+def main():
+    options = parser.parse_args()
+    if not options.command:
+        print(parser.format_help(), file=sys.stderr)
+        return
+
+    setup_logging(options)
     log.debug("Command options: %s", options)
 
     if options.command == 'init':
         cmd_init.init(options)
     elif options.command == 'backup':
         cmd_backup.backup(options)
+    elif options.command == 'backup-profile':
+        cmd_backup_profile.backup_profile(options)
     elif options.command == 'list-manifests':
         cmd_list_manifests.list_manifests(options)
     else:
         raise NotImplementedError(options.command)
-
