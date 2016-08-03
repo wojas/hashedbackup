@@ -1,6 +1,6 @@
 import os
 
-from hashedbackup.backend import get_backend
+from hashedbackup.backends import get_backend
 from hashedbackup.utils import printerr
 
 import logging
@@ -11,7 +11,7 @@ README = """This is a hashedbackup backup repository.
 
 def init_repo(backend):
     """
-    :type backend: hashedbackup.backend.BackendBase
+    :type backend: hashedbackup.backends.base.BackendBase
     """
     dst = backend.path
     log.info('Creating new repository in %s', dst)

@@ -8,7 +8,8 @@ import time
 from xattr import xattr
 
 from hashedbackup.fileinfo import FileInfo
-from hashedbackup.backend import ManifestWriter, get_backend
+from hashedbackup.manifests import ManifestWriter
+from hashedbackup.backends import get_backend
 
 MB = 1024 * 1024
 
@@ -118,7 +119,7 @@ class BackupCommand:
         log.verbose("[%6i] %s%s %s  %s",
             self.n_objects_added + self.n_objects_exist + 1,
             fhash,
-            '*' if not info.hash_from_cache else ' ',
+            '+' if not info.hash_from_cache else ' ',
             '{:12,}'.format(info.size),
             relpath)
 

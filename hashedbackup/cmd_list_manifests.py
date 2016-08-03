@@ -4,7 +4,7 @@ import logging
 
 from tabulate import tabulate
 
-from hashedbackup.backend import get_backend
+from hashedbackup.backends import get_backend
 from hashedbackup.utils import decode_namespace
 
 
