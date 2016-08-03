@@ -1,4 +1,5 @@
 import datetime
+import sys
 import os
 import socket
 import logging
@@ -8,7 +9,6 @@ from xattr import xattr
 
 from hashedbackup.fileinfo import FileInfo
 from hashedbackup.backend import ManifestWriter, get_backend
-from hashedbackup.utils import printerr
 
 MB = 1024 * 1024
 
@@ -115,11 +115,11 @@ class BackupCommand:
         else:
             self.n_updated += 1
 
-        log.verbose("[%6i] %s %s %s %s",
+        log.verbose("[%6i] %s%s %s  %s",
             self.n_objects_added + self.n_objects_exist + 1,
             fhash,
             '*' if not info.hash_from_cache else ' ',
-            '{:11,}'.format(info.size),
+            '{:12,}'.format(info.size),
             relpath)
 
         t0 = time.time()
@@ -185,6 +185,7 @@ class BackupCommand:
                     # recursing into them. This is officially supported by
                     # os.walk().
                     dirs.remove(dname)
+                    continue
 
                 relpath = os.path.join(reldir, dname)
                 self.process_dir(relpath)
@@ -199,6 +200,16 @@ class BackupCommand:
     def run(self):
         self.backend.check_destination_valid()
 
+        if not os.path.exists(self.root):
+            log.error('Location to backup does not exist: %s', self.root)
+            sys.exit(1)
+        if not os.path.isdir(self.root):
+            log.error('Location to backup is not a directory: %s', self.root)
+            sys.exit(1)
+        if not os.listdir(self.root):
+            log.error('Location to backup is empty: %s', self.root)
+            sys.exit(1)
+
         # To faster skip already uploaded objects, fetch hashes from server
         t0 = time.time()
         self.hashes = self.backend.get_object_hashes()
@@ -211,7 +222,7 @@ class BackupCommand:
             self.walk_root()
             self.close_manifest()
         except KeyboardInterrupt:
-            printerr('INTERRUPTED')
+            log.error('INTERRUPTED - NO MANIFEST WAS WRITTEN!')
 
         log.info('Total size (MB): %.1f', self.totalsize / MB)
         log.info('%i cached, %i hashed', self.n_cached, self.n_updated)
