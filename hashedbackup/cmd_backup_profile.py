@@ -1,10 +1,11 @@
 import os
 from configparser import ConfigParser
 import logging
-
 import sys
+
 from tabulate import tabulate
 
+from hashedbackup.cmd_list_manifests import get_remote_manifests
 from .cmd_backup import backup
 
 log = logging.getLogger(__name__)
@@ -36,17 +37,55 @@ def read_profiles():
     return config
 
 
-def show_profiles(profiles):
+def age_for_profiles(profiles, options):
+    remotes = set()
+    for name in profiles.sections():
+        section = profiles[name]
+        dst = section.get('dst', fallback=None)
+        if dst:
+            remotes.add(dst)
+
+    ages = {}
+    for remote in remotes:
+        log.verbose('Fetching list of manifests from remote %s', remote)
+        ages[remote] = {}
+
+        # TODO: this is hacky - refactor get_remote_manifests
+        options.dst = remote
+        options.namespace = None
+        manifests = get_remote_manifests(options)
+
+        for name, items in manifests.items():
+            if not items:
+                continue
+            ages[remote][name] = items[-1]['age_str']
+
+    return ages
+
+
+def show_profiles(profiles, options):
     headers = ['profile', 'src', 'dst', 'namespace']
+    if options.age:
+        ages = age_for_profiles(profiles, options)
+        headers.append('age of last backup')
+    else:
+        ages = {}
+
     rows = []
     for name in profiles.sections():
         section = profiles[name]
-        rows.append([
+        dst = section.get('dst')
+        namespace = section.get('namespace')
+        row = [
             name,
             section.get('src'),
-            section.get('dst'),
-            section.get('namespace'),
-        ])
+            dst,
+            namespace,
+        ]
+        if options.age:
+            row.append(ages.get(dst, {}).get(namespace, None))
+
+        rows.append(row)
 
     if rows:
         print(tabulate(rows, headers=headers))
@@ -59,10 +98,10 @@ def backup_profile(options):
     name = options.profile_name
 
     if not name:
-        show_profiles(profiles)
+        show_profiles(profiles, options)
     elif not name in profiles:
-        log.error('Profile %s not found.')
-        show_profiles(profiles)
+        log.error('Profile %s not found.', name)
+        show_profiles(profiles, options)
     else:
         profile = profiles[name]
         for key in REQUIRED_KEYS:

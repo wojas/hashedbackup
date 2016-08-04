@@ -64,7 +64,8 @@ p = subparsers.add_parser('backup-profile',
     help='Run a backup profile defined in ~/.hashedbackup/profiles')
 p.add_argument('profile_name', nargs='?', type=str, help='profile to use')
 p.add_argument('--age', action='store_true',
-    help='Check age of last backup (requires connecting to repositories)')
+    help='Check age of last backup when listing profiles '
+         '(requires connecting to repositories)')
 
 
 def setup_logging(options):
