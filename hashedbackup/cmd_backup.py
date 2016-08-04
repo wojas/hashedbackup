@@ -225,12 +225,21 @@ class BackupCommand:
         except KeyboardInterrupt:
             log.error('INTERRUPTED - NO MANIFEST WAS WRITTEN!')
 
-        log.info('Total size (MB): %.1f', self.totalsize / MB)
-        log.info('%i cached, %i hashed', self.n_cached, self.n_updated)
-        log.info('%i added, %i already in repository',
-                 self.n_objects_added, self.n_objects_exist)
-        log.info('%.1f MB uploaded', self.uploaded / MB)
-        log.info('Execution time: %.1fs', time.time() - self.start_time)
+        def display(num, float=False):
+            if float:
+                return '{:,.1f}'.format(num)
+            else:
+                return '{:,}'.format(num)
+
+        log.info('Total size (MB): %s',
+            display(self.totalsize / MB, float=True))
+        log.info('%s cached, %s hashed',
+            display(self.n_cached), display(self.n_updated))
+        log.info('%s added, %s already in repository',
+                 display(self.n_objects_added), display(self.n_objects_exist))
+        log.info('%s MB uploaded', display(self.uploaded / MB, float=True))
+        log.info('Execution time: %ss',
+            display(time.time() - self.start_time, float=True))
 
 
 def backup(options):
