@@ -5,11 +5,13 @@ import socket
 import logging
 import time
 
+import progressbar
 from xattr import xattr
 
 from hashedbackup.fileinfo import FileInfo
 from hashedbackup.manifests import ManifestWriter
 from hashedbackup.backends import get_backend
+from hashedbackup.utils import Timer
 
 MB = 1024 * 1024
 
@@ -36,6 +38,8 @@ class BackupCommand:
     n_objects_added = 0
     n_objects_exist = 0
     uploaded = 0
+    estimate = None
+    progressbar = None
 
     manifest_path = None
     manifest_tmp = None
@@ -51,6 +55,12 @@ class BackupCommand:
         self.root = os.path.abspath(options.src)
         self.dst = options.dst
         self.hashes = set()
+
+        if options.progress:
+            self.progressbar = progressbar.ProgressBar(
+                redirect_stderr=True,
+                redirect_stdout=True
+            )
 
         self.backend = get_backend(self.dst, options)
         log.debug('Storage backend is %s', self.backend.__class__.__name__)
@@ -116,12 +126,20 @@ class BackupCommand:
         else:
             self.n_updated += 1
 
-        log.verbose("[%6i] %s%s %s  %s",
+        total = ''
+        if self.estimate:
+            total = '/{:6}'.format(self.estimate['total_files'])
+
+        log_fileinfo = (
+            "[%6i%s] %s%s %s  %s",
             self.n_objects_added + self.n_objects_exist + 1,
+            total,
             fhash,
             '+' if not info.hash_from_cache else ' ',
             '{:12,}'.format(info.size),
-            relpath)
+            relpath
+        )
+        log.verbose(*log_fileinfo)
 
         t0 = time.time()
         if fhash in self.hashes:
@@ -130,12 +148,17 @@ class BackupCommand:
             added = self.backend.add_object(fhash, fpath)
         t1 = time.time()
         if added:
+            if self.options.uploaded:
+                log.info(*log_fileinfo)
             speed = '{:10,.1f} kB/s'.format(info.size / (t1 - t0) / 1024)
             log.verbose('Upload speed: %s', speed)
             self.n_objects_added += 1
             self.uploaded += info.size
         else:
             self.n_objects_exist += 1
+
+        if self.progressbar:
+            self.progressbar.update(self.n_objects_exist + self.n_objects_added)
 
         self.manifest.add(
             path=relpath,
@@ -149,15 +172,17 @@ class BackupCommand:
         assert isinstance(exc, OSError)
         log.warn('Could not list directory, skipping: %s', exc.filename)
 
-    def exclude_file(self, reldir, name, *, xa=None):
+    def exclude_file(self, reldir, name, *, xa=None, quiet=False):
         """Check if a file or dir needs to be excluded"""
         path = os.path.join(self.root, reldir, name)
         if name in IGNORED_ENTRIES:
-            log.verbose('Skipped (in IGNORED_ENTRIES): %s', path)
+            if not quiet:
+                log.debug('Skipped (in IGNORED_ENTRIES): %s', path)
             return True
 
         if name.startswith('._'):
-            log.verbose('Skipped (xattr storage): %s', path)
+            if not quiet:
+                log.debug('Skipped (xattr storage): %s', path)
             return True
 
         if not xa:
@@ -168,35 +193,63 @@ class BackupCommand:
             except IOError:
                 pass
             else:
-                log.verbose('Skipped (%s): %s', attr, path)
+                if not quiet:
+                    log.verbose('Skipped (%s): %s', attr, path)
                 return True
 
         return False
 
-    def walk_root(self):
+    def walk_root(self, quiet=False):
+        """
+        :param bool quiet: disable logging (used by prescan)
+        :return: Iterable of (dirs, files) with both as path relative to
+                 the root
+        :rtype: iterable[tuple[str,str]]
+        """
         for dirname, dirs, files in os.walk(
-                    self.root, onerror=self.on_walk_error, followlinks=True):
+                self.root, onerror=self.on_walk_error, followlinks=True):
             assert isinstance(dirname, str)
             assert dirname.startswith(self.root)
             reldir = dirname[len(self.root):].lstrip('/')
 
+            reldirs = []
+            relfiles = []
+
             for dname in dirs[:]:
-                if self.exclude_file(reldir, dname):
+                if self.exclude_file(reldir, dname, quiet=quiet):
                     # The dirs list is editable. Removing entries will prevent
                     # recursing into them. This is officially supported by
                     # os.walk().
+                    # FIXME: this does not seem to work correctly
                     dirs.remove(dname)
                     continue
 
                 relpath = os.path.join(reldir, dname)
-                self.process_dir(relpath)
+                reldirs.append(relpath)
 
             for fname in files:
-                if self.exclude_file(reldir, fname):
+                if self.exclude_file(reldir, fname, quiet=quiet):
                     continue
 
                 relpath = os.path.join(reldir, fname)
+                relfiles.append(relpath)
+
+            yield reldirs, relfiles
+
+    def process_root(self):
+        for dirs, files in self.walk_root():
+            for relpath in dirs:
+                self.process_dir(relpath)
+
+            for relpath in files:
                 self.process_file(relpath)
+
+    @Timer("estimate_work")
+    def estimate_work(self):
+        total_files = 0
+        for dirs, files in self.walk_root():
+            total_files += len(files)
+        return dict(total_files=total_files)
 
     def run(self):
         self.backend.check_destination_valid()
@@ -212,16 +265,27 @@ class BackupCommand:
             sys.exit(1)
 
         # To faster skip already uploaded objects, fetch hashes from server
-        t0 = time.time()
-        self.hashes = self.backend.get_object_hashes()
-        t1 = time.time()
-        log.verbose('Fetching repository hashes took %.1fs for %i hashes',
-                    t1 - t0, len(self.hashes))
+        with Timer("fetch repository hashes") as timer:
+            self.hashes = self.backend.get_object_hashes()
+            log.verbose('Fetching repository hashes took %s for %i hashes',
+                    timer.secs_str, len(self.hashes))
 
         try:
             self.open_manifest()
-            self.walk_root()
+
+            if self.options.progress:
+                log.info('Estimating total number of files')
+                self.estimate = self.estimate_work()
+                log.info('Estimated total number of files: %i',
+                         self.estimate['total_files'])
+                self.estimate = self.estimate_work()
+                self.progressbar.start(self.estimate['total_files'])
+            self.process_root()
+
             self.close_manifest()
+            if self.progressbar:
+                self.progressbar.finish()
+
         except KeyboardInterrupt:
             log.error('INTERRUPTED - NO MANIFEST WAS WRITTEN!')
 

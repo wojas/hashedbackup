@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import json
 import sys
@@ -5,8 +6,81 @@ import pwd
 import grp
 import urllib.parse
 import uuid
+import logging
+import time
+
 
 MB = 1024 * 1024
+
+log = logging.getLogger(__name__)
+
+
+class Timer:
+    """Used for timing the performance of code
+
+    Plain usage:
+
+        timer = Timer("foo")
+        do_something()
+        print("This took", timer.msecs_str)
+
+    Usage in a context:
+
+        with Timer("foo") as timer:
+            do_something()
+            print("This took", timer.msecs_str)
+
+    Usage as a decorator:
+
+        @Timer("do_something timer")
+        def do_something():
+            ...
+    """
+
+    def __init__(self, name="untitled"):
+        self.t0 = time.time()
+        self.name = name
+
+    @property
+    def secs(self):
+        return time.time() - self.t0
+
+    @property
+    def secs_str(self):
+        return "{:,.1f} s".format(self.secs)
+
+    @property
+    def msecs(self):
+        return 1000 * (time.time() - self.t0)
+
+    @property
+    def msecs_str(self):
+        return "{:,.1f} ms".format(self.msecs)
+
+    def log_secs(self, label):
+        log.debug('Timer %s: %s :: %s', self.name, self.secs_str, label)
+
+    def log_msecs(self, label):
+        log.debug('Timer %s: %s :: %s', self.name, self.msecs_str, label)
+
+    # 'with' context manager
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        log.debug('Timer %s: exited context after %s',
+                  self.name, self.secs_str)
+
+    # function decorator
+
+    def __call__(self, func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+        return wrapper
+
 
 def printerr(*args, **kwargs):
     kwargs['file'] = sys.stderr

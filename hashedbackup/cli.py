@@ -1,7 +1,9 @@
 import argparse
 import sys
+
 import logging
 import colorlog
+
 
 # Add extra VERBOSE log level between DEBUG and INFO
 VERBOSE = 15
@@ -18,10 +20,16 @@ from hashedbackup import cmd_init, cmd_backup, cmd_list_manifests, \
 log = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(prog='hashedbackup')
+parser.add_argument('-u', '--uploaded', action='store_true',
+    help='Log all files that were uploaded (even if not --verbose)')
 parser.add_argument('-v', '--verbose', action='store_true',
     help='Enable more verbose output')
 parser.add_argument('--debug', action='store_true',
     help='Enable debug output')
+parser.add_argument('--progress', action='store_true',
+    help='Show progressbar')
+parser.add_argument('--no-color', action='store_true',
+    help='Never use colors in output')
 
 subparsers = parser.add_subparsers(
     dest='command',
@@ -68,11 +76,28 @@ p.add_argument('--age', action='store_true',
          '(requires connecting to repositories)')
 
 
+class StderrProxy:
+    """Proxy writes to sys.stderr
+
+    This is needed, because progressbar overrides it and
+    logging.StreamHandler keeps a reference to the original one instead of
+    using the current one.
+    """
+
+    def write(self, s):
+        sys.stderr.write(s)
+
+    def flush(self):
+        sys.stderr.flush()
+
+
 def setup_logging(options):
-    handler = colorlog.StreamHandler()
-    if sys.stderr.isatty():
+    handler = logging.StreamHandler(StderrProxy())
+
+    if sys.__stderr__.isatty() and not options.no_color:
         formatter = colorlog.ColoredFormatter(
-            "%(log_color)s%(levelname)-8s%(reset)s %(message_log_color)s%(message)s",
+            "%(log_color)s%(levelname)-8s%(reset)s "
+              "%(message_log_color)s%(message)s",
             datefmt=None,
             reset=True,
             log_colors={
