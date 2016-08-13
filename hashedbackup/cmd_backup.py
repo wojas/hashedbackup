@@ -8,6 +8,7 @@ import time
 import progressbar
 from xattr import xattr
 
+from hashedbackup.cmd_list_manifests import get_remote_manifests
 from hashedbackup.fileinfo import FileInfo
 from hashedbackup.manifests import ManifestWriter
 from hashedbackup.backends import get_backend
@@ -59,7 +60,15 @@ class BackupCommand:
         if options.progress:
             self.progressbar = progressbar.ProgressBar(
                 redirect_stderr=True,
-                redirect_stdout=True
+                redirect_stdout=True,
+                widgets=[
+                    progressbar.widgets.Percentage(),
+                    ' | ', progressbar.widgets.SimpleProgress(),
+                    ' | ', lambda *args: str(self.n_objects_added), ' new',
+                    ' ', progressbar.widgets.Bar(),
+                    ' ', progressbar.widgets.Timer(format='Time: %(elapsed)s'),
+                    ' ', progressbar.widgets.AdaptiveETA(samples=10),
+                ]
             )
 
         self.backend = get_backend(self.dst, options)
@@ -206,8 +215,9 @@ class BackupCommand:
                  the root
         :rtype: iterable[tuple[str,str]]
         """
+        onerror = None if quiet else self.on_walk_error
         for dirname, dirs, files in os.walk(
-                self.root, onerror=self.on_walk_error, followlinks=True):
+                self.root, onerror=onerror, followlinks=True):
             assert isinstance(dirname, str)
             assert dirname.startswith(self.root)
             reldir = dirname[len(self.root):].lstrip('/')
@@ -236,6 +246,7 @@ class BackupCommand:
 
             yield reldirs, relfiles
 
+    @Timer("process_root")
     def process_root(self):
         for dirs, files in self.walk_root():
             for relpath in dirs:
@@ -247,10 +258,11 @@ class BackupCommand:
     @Timer("estimate_work")
     def estimate_work(self):
         total_files = 0
-        for dirs, files in self.walk_root():
+        for dirs, files in self.walk_root(quiet=True):
             total_files += len(files)
         return dict(total_files=total_files)
 
+    @Timer("run")
     def run(self):
         self.backend.check_destination_valid()
 
@@ -264,6 +276,20 @@ class BackupCommand:
             log.error('Location to backup is empty: %s', self.root)
             sys.exit(1)
 
+        # Skip backup if recent enough
+        if self.options.if_older_than:
+            manifests = get_remote_manifests(self.options)
+            for name, items in manifests.items():
+                assert name == self.options.namespace
+                if items:
+                    last_backup_age = items[-1]['age']
+                    if last_backup_age < self.options.if_older_than:
+                        log.info('Backup skipped, because the last backup is '
+                                 'recent enough (%s < %s)',
+                                 str(last_backup_age).split('.')[0],
+                                 self.options.if_older_than)
+                        return
+
         # To faster skip already uploaded objects, fetch hashes from server
         with Timer("fetch repository hashes") as timer:
             self.hashes = self.backend.get_object_hashes()
@@ -274,12 +300,14 @@ class BackupCommand:
             self.open_manifest()
 
             if self.options.progress:
-                log.info('Estimating total number of files')
+                log.info('Estimating total number of files for progress bar...')
                 self.estimate = self.estimate_work()
                 log.info('Estimated total number of files: %i',
                          self.estimate['total_files'])
                 self.estimate = self.estimate_work()
                 self.progressbar.start(self.estimate['total_files'])
+
+            log.info('Backing up files...')
             self.process_root()
 
             self.close_manifest()
@@ -297,9 +325,9 @@ class BackupCommand:
 
         log.info('Total size (MB): %s',
             display(self.totalsize / MB, float=True))
-        log.info('%s cached, %s hashed',
+        log.info('File hashes: %s cached, %s hashed',
             display(self.n_cached), display(self.n_updated))
-        log.info('%s added, %s already in repository',
+        log.info('File data: %s added, %s already in repository',
                  display(self.n_objects_added), display(self.n_objects_exist))
         log.info('%s MB uploaded', display(self.uploaded / MB, float=True))
         log.info('Execution time: %ss',

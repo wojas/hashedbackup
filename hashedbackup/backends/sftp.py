@@ -7,8 +7,8 @@ import paramiko
 from paramiko.config import SSH_PORT
 
 from hashedbackup.backends.base import BackendBase
-from hashedbackup.utils import temp_filename, copy_and_hash_fo, MB
-
+from hashedbackup.utils import temp_filename, copy_and_hash_fo, MB, Timer, \
+    object_bucket_dirs
 
 log = logging.getLogger(__name__)
 
@@ -114,11 +114,11 @@ class SFTPBackend(BackendBase):
 
         # Checking remotely for existence just adds roundtrips
         if fhash[:2] not in self._existing_object_dirs:
+            # FIXME: We assume that the only reason for failure is it already
+            # exists
             self.try_mkdir(
-                os.path.join(self.path, 'objects', fhash[0:2]))
-        if fhash[:4] not in self._existing_object_dirs:
-            self.try_mkdir(
-                os.path.join(self.path, 'objects', fhash[0:2], fhash[2:4]))
+                os.path.join(self.path, 'objects', fhash[:2]))
+            self._existing_object_dirs.add(fhash[:2])
 
         tmp = os.path.join(self.path, 'tmp', temp_filename())
 
@@ -155,8 +155,12 @@ class SFTPBackend(BackendBase):
 
         This executes a remote shell command to get a list of hashes, since
         recursively listing the contents of objects/ through SFTP would be
-        extremely slow, because it requires three remote sync calls for up to
-        ~65k directories.
+        extremely slow, because it requires three remote sync calls for up
+        256 directories. This could be improved upon by hacking the SFTP
+        interface for async operation (maybe someday).
+
+        TODO: This used to be ~65k dirs, with 256 it might be faster than
+              stat in situations with many files.
 
         If the server does not allow executing shell commands, this method
         returns an empty set and each object will be checked using one remote
@@ -165,10 +169,11 @@ class SFTPBackend(BackendBase):
         :return: set of hex hashes on server
         :rtype: set[str]
         """
+        # TODO: implement remote listdir
         hashes = set()
         cmd = """find '{}/objects' -type f | sed 's|.*/||'""".format(
             self.path.replace("'", r"\'"))
-        log.verbose('Fetching remote file hashes using exec_comamnd: %s', cmd)
+        log.verbose('Fetching remote file hashes using exec_command: %s', cmd)
 
         try:
             stdin, stdout, stderr = self.client.exec_command(cmd, bufsize=1*MB)
@@ -182,7 +187,6 @@ class SFTPBackend(BackendBase):
             if len(line) == 32:
                 hashes.add(line)
                 self._existing_object_dirs.add(line[:2])
-                self._existing_object_dirs.add(line[:4])
             else:
                 log.debug('Invalid hash in list, skipping: %s', line)
 

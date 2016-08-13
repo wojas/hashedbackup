@@ -6,6 +6,8 @@ import colorlog
 
 
 # Add extra VERBOSE log level between DEBUG and INFO
+from hashedbackup.utils import parse_age
+
 VERBOSE = 15
 logging.addLevelName(VERBOSE, "VERBOSE")
 def verbose(self, message, *args, **kws):
@@ -27,7 +29,9 @@ parser.add_argument('-v', '--verbose', action='store_true',
 parser.add_argument('--debug', action='store_true',
     help='Enable debug output')
 parser.add_argument('--progress', action='store_true',
-    help='Show progressbar')
+    help='Show progressbar (default if stderr is a tty)')
+parser.add_argument('--no-progress', action='store_true',
+    help='Do not show progressbar (default if stderr is not a tty)')
 parser.add_argument('--no-color', action='store_true',
     help='Never use colors in output')
 
@@ -67,6 +71,9 @@ p.add_argument('--hardlink', action='store_true',
          'WARNING: Hard links are unreliable on OS X. On 10.11 (El Capitan) '
          'editing a file in Preview.app (and probably in other apps too) '
          'will destroy the data for the other link!')
+p.add_argument('--if-older-than', type=parse_age,
+    help='Only backup if the last one is older than given age. '
+         'Age format like "7d", "4h", "15m" or "30s"')
 
 p = subparsers.add_parser('backup-profile',
     help='Run a backup profile defined in ~/.hashedbackup/profiles')
@@ -74,6 +81,9 @@ p.add_argument('profile_name', nargs='?', type=str, help='profile to use')
 p.add_argument('--age', action='store_true',
     help='Check age of last backup when listing profiles '
          '(requires connecting to repositories)')
+p.add_argument('--if-older-than', type=parse_age,
+    help='Only backup if the last one is older than given age. '
+         'Age format like "7d", "4h", "15m" or "30s"')
 
 
 class StderrProxy:
@@ -136,6 +146,10 @@ def main():
     if not options.command:
         print(parser.format_help(), file=sys.stderr)
         return
+
+    # Show a progress bar for interactive sessions if not explicitly disabled
+    if not options.no_progress and sys.stderr.isatty():
+        options.progress = True
 
     setup_logging(options)
     log.debug("Command options: %s", options)

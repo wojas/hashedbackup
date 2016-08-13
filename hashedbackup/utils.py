@@ -1,3 +1,4 @@
+import datetime
 import functools
 import hashlib
 import json
@@ -41,6 +42,9 @@ class Timer:
         self.t0 = time.time()
         self.name = name
 
+    def reset(self):
+        self.t0 = time.time()
+
     @property
     def secs(self):
         return time.time() - self.t0
@@ -66,6 +70,7 @@ class Timer:
     # 'with' context manager
 
     def __enter__(self):
+        self.reset()
         return self
 
     def __exit__(self, *args):
@@ -81,6 +86,47 @@ class Timer:
                 return func(*args, **kwargs)
         return wrapper
 
+
+def parse_age(s):
+    """
+    :param str s: like "7d", "4h", "15m" or "30s"
+    :rtype: datetime.timedelta
+    :raises ValueError: if wrong format
+    """
+    if not s:
+        raise ValueError("Empty string")
+
+    try:
+        int(s)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("No unit specified behind number (d/h/m/s)")
+
+    unit = s[-1].lower()
+    try:
+        num = int(s[:-1])
+    except ValueError:
+        raise
+
+    if unit == 's':
+        return datetime.timedelta(seconds=num)
+    elif unit == 'm':
+        return datetime.timedelta(seconds=num * 60)
+    elif unit == 'h':
+        return datetime.timedelta(seconds=num * 3600)
+    elif unit == 'd':
+        return datetime.timedelta(days=num)
+    else:
+        raise ValueError("Invalid age unit: {}".format(unit))
+
+
+def object_bucket_dirs():
+    """
+    :return: iterable of '00'...'ff'
+    """
+    for i in range(256):
+        yield '{:02x}'.format(i)
 
 def printerr(*args, **kwargs):
     kwargs['file'] = sys.stderr
