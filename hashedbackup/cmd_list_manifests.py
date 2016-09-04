@@ -29,9 +29,15 @@ def get_remote_manifests(options):
         if options.namespace and name != options.namespace:
             continue
 
+        try:
+            filenames = sorted(backend.listdir(os.path.join(manifests, ns)))
+        except (NotADirectoryError, OSError):
+            # .DS_Store, etc
+            continue
+
         manifest_dict[name] = []
 
-        for fname in sorted(backend.listdir(os.path.join(manifests, ns))):
+        for fname in filenames:
             if not fname.endswith('.manifest.bz2'):
                 continue
 
