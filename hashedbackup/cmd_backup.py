@@ -293,7 +293,7 @@ class BackupCommand:
         # To faster skip already uploaded objects, fetch hashes from server
         with Timer("fetch repository hashes") as timer:
             self.hashes = self.backend.get_object_hashes()
-            log.verbose('Fetching repository hashes took %s for %i hashes',
+            log.info('Fetching repository hashes took %s for %i hashes',
                     timer.secs_str, len(self.hashes))
 
         try:

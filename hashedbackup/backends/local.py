@@ -2,8 +2,7 @@ import os
 import logging
 
 from hashedbackup.backends.base import BackendBase
-from hashedbackup.utils import copy_and_hash
-
+from hashedbackup.utils import copy_and_hash, object_bucket_dirs
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +61,14 @@ class LocalBackend(BackendBase):
         return os.path.isdir(path)
 
     def get_object_hashes(self):
-        # No need for this speedup for local filesystems. We will just check
-        # each object's existence.
-        return set()
+        hashes = set()
+        for bucket in object_bucket_dirs():
+            bucket_path = os.path.join(self.path, 'objects', bucket)
+            for fname in os.listdir(bucket_path):
+                if fname.startswith('.'):
+                    continue
+                if len(fname) == 32:
+                    hashes.add(fname)
+                else:
+                    log.debug('Invalid hash in list, skipping: %s', fname)
+        return hashes
